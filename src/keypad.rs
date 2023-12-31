@@ -1,14 +1,14 @@
-pub struct Keypad<'a> {
-    cols: [PinDriver<'a, AnyIOPin, InputOutput>; 3],
-    rows: [PinDriver<'a, AnyIOPin, InputOutput>; 4],
-}
-
 use anyhow::Result;
 use esp_idf_svc::hal::{
     gpio::*,
     peripheral::Peripheral,
 };
 use esp_idf_svc::sys::EspError;
+
+pub struct Keypad<'a> {
+    cols: [PinDriver<'a, AnyIOPin, InputOutput>; 3],
+    rows: [PinDriver<'a, AnyIOPin, InputOutput>; 4],
+}
 
 impl<'d> Keypad<'d> {
     pub fn new(
