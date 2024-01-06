@@ -6,10 +6,13 @@ use esp_idf_svc::hal::{
         AnyInputPin,
         Input,
         PinDriver,
-        Level,
+        Level, AnyIOPin,
     },
     timer::config::Config,
     delay::FreeRtos, peripheral::Peripheral,
+};
+use esp_idf_svc::sys::{
+    esp_deep_sleep_start,
 };
 use crate::seven_segment::SevenSegment;
 use crate::keypad::Keypad;
@@ -45,7 +48,7 @@ enum Mode {
     Running{seconds: u8, minutes: u8},
     Done,
     Paused{seconds: u8, minutes: u8},
-    // Sleep,
+    Sleep,
 }
 
 struct SoundPack {
@@ -130,6 +133,7 @@ impl<'a> App<'a> {
                 Mode::Running{seconds, minutes} => self.run_running(seconds, minutes)?,
                 Mode::Done => self.run_done()?,
                 Mode::Paused{seconds, minutes} => self.run_paused(seconds, minutes)?,
+                Mode::Sleep => self.run_sleep()?,
             };
             mode = next_mode;
         }
@@ -137,11 +141,17 @@ impl<'a> App<'a> {
 
     fn run_idle(&mut self) -> Result<Mode> {
         self.display.set_segments([0b00000000; 4])?;
-
+        let start_time = self.timer.counter()?;
+        const TIMEOUT: u64 = 60;
         loop {
             let key = self.keypad.get_key()?;
             if key.is_some() {
                 return Ok(Mode::UserInput);
+            }
+            let elapsed = self.timer.counter()? - start_time;
+            let seconds_elapsed = elapsed / self.timer.tick_hz();
+            if seconds_elapsed > TIMEOUT {
+                return Ok(Mode::Sleep);
             }
             FreeRtos::delay_ms(50u32);
         }
@@ -150,6 +160,8 @@ impl<'a> App<'a> {
 
     fn run_user_input(&mut self) -> Result<Mode> {
         self.display.set_segments([0b00000000; 4])?;
+        let start_time = self.timer.counter()?;
+        const TIMEOUT: u64 = 60 * 5;
 
         let mut last_key = None;
         let mut digits = [10u8; 4];
@@ -160,7 +172,7 @@ impl<'a> App<'a> {
                 if digit > 9 {
                     digit = 0;
                 }
-                if digits[0] == 10 {
+                if digits[1] == 10 {
                     digits = [digits[1], digits[2], digits[3], digit];
                 }
 
@@ -181,6 +193,12 @@ impl<'a> App<'a> {
                 return Ok(Mode::Running{seconds, minutes});
             }
             if self.stop_button.get_level() == Level::Low {
+                self.speaker.play(self.sounds.beep_sound())?;
+                return Ok(Mode::Idle);
+            }
+            let elapsed = self.timer.counter()? - start_time;
+            let seconds_elapsed = elapsed / self.timer.tick_hz();
+            if seconds_elapsed > TIMEOUT {
                 self.speaker.play(self.sounds.beep_sound())?;
                 return Ok(Mode::Idle);
             }
@@ -258,6 +276,8 @@ impl<'a> App<'a> {
     }
 
     fn run_paused(&mut self, seconds: u8, minutes: u8) -> Result<Mode> {
+        let start_time = self.timer.counter()?;
+        const TIMEOUT: u64 = 60 * 5;
         loop {
             if self.start_button.get_level() == Level::Low && self.door_switch.get_level() == Level::Low {
                 self.speaker.play(self.sounds.beep_sound())?;
@@ -267,26 +287,38 @@ impl<'a> App<'a> {
                 self.speaker.play(self.sounds.beep_sound())?;
                 return Ok(Mode::Idle);
             }
+            let elapsed = self.timer.counter()? - start_time;
+            let seconds_elapsed = elapsed / self.timer.tick_hz();
+            if seconds_elapsed > TIMEOUT {
+                self.speaker.play(self.sounds.beep_sound())?;
+                return Ok(Mode::Idle);
+            }
             FreeRtos::delay_ms(50u32);
         }
+    }
+
+    fn run_sleep(&mut self) -> Result<Mode> {
+        Ok(Mode::Idle)
     }
 }
 
 pub fn run_app() -> Result<()> {
     let peripherals = Peripherals::take()?;
-    let display = SevenSegment::new(peripherals.pins.gpio22, peripherals.pins.gpio21)?;
+    let display = SevenSegment::new(peripherals.pins.gpio16, peripherals.pins.gpio17)?;
     let keypad = Keypad::new(
-        peripherals.pins.gpio32, peripherals.pins.gpio19, peripherals.pins.gpio25,
-        peripherals.pins.gpio18, peripherals.pins.gpio27, peripherals.pins.gpio26, peripherals.pins.gpio33,
+        peripherals.pins.gpio14, peripherals.pins.gpio25, peripherals.pins.gpio21,
+        peripherals.pins.gpio26, peripherals.pins.gpio19, peripherals.pins.gpio22, peripherals.pins.gpio13,
     )?;
     let speaker = Speaker::new(
         peripherals.i2s0,
-        peripherals.pins.gpio17, peripherals.pins.gpio5, peripherals.pins.gpio16,
+        peripherals.pins.gpio15, peripherals.pins.gpio23, peripherals.pins.gpio4,
     )?;
     let timer = TimerDriver::new(peripherals.timer00, &Config::default())?;
-    let start_button = PinDriver::input(peripherals.pins.gpio4.into_ref().map_into::<AnyInputPin>())?;
-    let stop_button = PinDriver::input(peripherals.pins.gpio0.into_ref().map_into::<AnyInputPin>())?;
-    let door_switch = PinDriver::input(peripherals.pins.gpio2.into_ref().map_into::<AnyInputPin>())?;
+    let start_button = PinDriver::input(peripherals.pins.gpio34.into_ref().map_into::<AnyInputPin>())?;
+    let stop_button = PinDriver::input(peripherals.pins.gpio35.into_ref().map_into::<AnyInputPin>())?;
+    let door_switch = PinDriver::input(peripherals.pins.gpio39.into_ref().map_into::<AnyInputPin>())?;
+    let mut light = PinDriver::output(peripherals.pins.gpio12.into_ref().map_into::<AnyIOPin>())?;
+    light.set_level(Level::High)?;
 
     let mut app = App::new(
         display,
