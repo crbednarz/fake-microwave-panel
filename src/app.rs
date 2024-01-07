@@ -17,6 +17,7 @@ use esp_idf_svc::sys::{
 use crate::seven_segment::SevenSegment;
 use crate::keypad::Keypad;
 use crate::speaker::Speaker;
+use crate::remote::Remote;
 use awedio::{
     sounds::MemorySound,
     Sound,
@@ -98,6 +99,7 @@ struct App<'a> {
     start_button: PinDriver<'a, AnyInputPin, Input>,
     stop_button: PinDriver<'a, AnyInputPin, Input>,
     door_switch: PinDriver<'a, AnyInputPin, Input>,
+    remote: Remote<'a>,
     sounds: SoundPack,
 }
 
@@ -110,6 +112,7 @@ impl<'a> App<'a> {
         start_button: PinDriver<'a, AnyInputPin, Input>,
         stop_button: PinDriver<'a, AnyInputPin, Input>,
         door_switch: PinDriver<'a, AnyInputPin, Input>,
+        remote: Remote<'a>,
     ) -> Self {
         Self {
             display,
@@ -119,6 +122,7 @@ impl<'a> App<'a> {
             start_button,
             stop_button,
             door_switch,
+            remote,
             sounds: SoundPack::new(),
         }
     }
@@ -214,6 +218,7 @@ impl<'a> App<'a> {
         let mut last_seconds_elapsed = 0;
         let mut seconds = seconds;
         let mut minutes = minutes;
+        self.remote.send_on()?;
         loop {
             let elapsed = self.timer.counter()? - start_time;
             let seconds_elapsed = elapsed / self.timer.tick_hz();
@@ -226,6 +231,7 @@ impl<'a> App<'a> {
                 }
                 if minutes == 0 && seconds == 0 {
                     self.speaker.clear();
+                    self.remote.send_off()?;
                     return Ok(Mode::Done);
                 }
                 let mut digits = [
@@ -251,10 +257,12 @@ impl<'a> App<'a> {
                 last_seconds_elapsed = seconds_elapsed;
             }
             if self.door_switch.get_level() == Level::High {
+                self.remote.send_off()?;
                 self.speaker.clear();
                 return Ok(Mode::Paused{seconds, minutes});
             }
             if self.stop_button.get_level() == Level::Low {
+                self.remote.send_off()?;
                 self.speaker.clear();
                 self.speaker.play(self.sounds.beep_sound())?;
                 return Ok(Mode::Idle);
@@ -317,8 +325,7 @@ pub fn run_app() -> Result<()> {
     let start_button = PinDriver::input(peripherals.pins.gpio34.into_ref().map_into::<AnyInputPin>())?;
     let stop_button = PinDriver::input(peripherals.pins.gpio35.into_ref().map_into::<AnyInputPin>())?;
     let door_switch = PinDriver::input(peripherals.pins.gpio39.into_ref().map_into::<AnyInputPin>())?;
-    let mut light = PinDriver::output(peripherals.pins.gpio12.into_ref().map_into::<AnyIOPin>())?;
-    light.set_level(Level::High)?;
+    let remote = Remote::new(peripherals.rmt.channel0, peripherals.pins.gpio12)?;
 
     let mut app = App::new(
         display,
@@ -328,6 +335,7 @@ pub fn run_app() -> Result<()> {
         start_button,
         stop_button,
         door_switch,
+        remote,
     );
 
     app.run()

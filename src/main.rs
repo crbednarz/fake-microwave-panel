@@ -2,6 +2,7 @@ pub mod app;
 pub mod seven_segment;
 pub mod keypad;
 pub mod speaker;
+pub mod remote;
 
 use crate::app::run_app;
 
